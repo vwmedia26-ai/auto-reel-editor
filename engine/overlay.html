@@ -1,0 +1,291 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family: "TikTok Sans"; font-weight: 600; src: url("assets/fonts/tiktok-sans-latin-600-normal.woff2") format("woff2"); }
+:root {
+  --glass: rgba(20, 20, 24, .62);
+  --blur: 26px;
+  --ink: #fff;
+  --ink-dim: rgba(255, 255, 255, .55);
+  --ink-off: rgba(255, 255, 255, .45);
+  --ring: rgba(255, 255, 255, .35);
+  --ui: system-ui, -apple-system, "SF Pro Text", Inter, "Segoe UI", Roboto, sans-serif;
+}
+html, body { margin: 0; width: 1080px; height: 1920px; background: transparent; overflow: hidden; }
+#bg { position: absolute; left: 0; top: 0; width: 1080px; display: none; }
+#stage { position: absolute; inset: 0; font-family: var(--ui); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+/* glass card */
+.pane {
+  position: absolute; box-sizing: border-box; border-radius: 34px; overflow: hidden;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .16), inset 0 0 0 1px rgba(255, 255, 255, .05);
+  transform-origin: 50% 50%; will-change: transform, opacity;
+}
+.pane.slim { border-radius: 38px; }
+.reveal { will-change: opacity, transform; }
+
+/* checklist */
+.head { position: absolute; left: 28px; right: 28px; top: 22px; height: 44px; display: flex; align-items: center; gap: 14px; white-space: nowrap; }
+.head .ttl { font-size: 26px; font-weight: 700; }
+.head .sub { font-size: 26px; font-weight: 500; color: var(--ink-dim); }
+.chips { position: absolute; display: flex; align-items: center; justify-content: space-between; }
+.chip { display: flex; align-items: center; gap: 12px; font-weight: 600; color: var(--ink-off); white-space: nowrap; }
+.dot { width: 34px; height: 34px; border-radius: 17px; box-sizing: border-box; border: 2.5px solid var(--ring);
+       display: flex; align-items: center; justify-content: center; flex: none; }
+.dot svg { display: none; }
+.chip.on { color: var(--ink); }
+.chip.on .dot svg { display: block; }
+
+/* tiles, bars */
+.tile { flex: none; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.tile img { display: block; }
+.row { position: absolute; left: 28px; right: 28px; height: 44px; display: flex; align-items: center; gap: 16px; }
+.row .nm { width: 118px; font-size: 28px; font-weight: 600; white-space: nowrap; }
+.track { flex: 1; height: 16px; border-radius: 8px; background: rgba(255, 255, 255, .14); overflow: hidden; }
+.fill { height: 100%; width: 0; border-radius: 8px; }
+.stat { text-align: right; font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* flow arrow */
+.flow { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 22px; font-size: 30px; font-weight: 600; white-space: nowrap; }
+.flow .arw { font-size: 34px; }
+
+/* typing prompt */
+.chat { position: absolute; left: 30px; right: 86px; top: 0; bottom: 0; display: flex; align-items: center; font-size: 27px; font-weight: 500; white-space: nowrap; overflow: hidden; }
+.chat .ph { color: var(--ink-off); }
+.caret { display: inline-block; width: 3px; height: 32px; margin-left: 2px; }
+.send { position: absolute; right: 16px; top: 14px; width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; }
+
+/* notification banner */
+.note { position: absolute; left: 22px; right: 22px; top: 0; bottom: 0; display: flex; align-items: center; gap: 18px; }
+.note .txt { flex: 1; min-width: 0; }
+.note .l1 { display: flex; justify-content: space-between; font-size: 26px; font-weight: 600; }
+.note .when { font-size: 22px; font-weight: 500; color: var(--ink-dim); }
+.note .l2 { font-size: 25px; font-weight: 400; color: rgba(255, 255, 255, .85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+/* caption */
+#cap { position: absolute; left: 0; width: 1080px; top: 0; height: 200px; display: flex; align-items: center; justify-content: center;
+       font-family: "TikTok Sans", sans-serif; font-weight: 600; font-size: 56px; letter-spacing: -.012em; color: #fff; white-space: nowrap; line-height: 1; }
+</style>
+</head>
+<body>
+<img id="bg" alt="">
+<div id="stage"></div>
+<div id="cap" style="display:none"></div>
+<script>
+"use strict";
+/* Auto Reel Editor overlay engine. Pure function of time: setup(spec) builds the DOM once,
+   frame(t) puts every element in its state for time t (seconds). No timers, no animation clock. */
+(() => {
+  const BLUE = "#5E9EFF", ORANGE = "#D97757";
+  const LAYOUT = {
+    slim:   { top: 204, left: 70, width: 940, height: 76 },
+    twoRow: { top: 200, left: 70, width: 940, height: 146 },
+  };
+  const IN = 0.12, OUT = 0.18, STAGGER = 0.055;
+
+  // ---- math ----
+  const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+  const easeOut3 = (x) => 1 - Math.pow(1 - clamp(x), 3);
+  // damped spring step response, 0 -> 1 with a little overshoot
+  const springStep = (t, freq = 3.2, damp = 11) => t <= 0 ? 0 : 1 - Math.exp(-damp * t) * Math.cos(2 * Math.PI * freq * t);
+  const between = (from, to, p) => from + (to - from) * p;
+
+  // ---- building blocks ----
+  const CHECK = '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const ARROW_UP = '<svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const APPS = {
+    chatgpt: { icon: "openai", bg: "#000", fg: "#fff", k: 0.62 },
+    openai:  { icon: "openai", bg: "#000", fg: "#fff", k: 0.62 },
+    claude:  { icon: "claude", bg: "#F4F0E6", fg: ORANGE, k: 0.64 },
+    gemini:  { icon: "googlegemini", bg: "#fff", fg: "#8E75B2", k: 0.62 },
+    gmail:   { icon: "gmail", bg: "#fff", fg: "#EA4335", k: 0.6 },
+    instagram: { icon: "instagram", bg: "#E4405F", fg: "#fff", k: 0.6 },
+  };
+  const SVG_CACHE = {};
+  const iconMarkup = (name, color, px) => {
+    const raw = SVG_CACHE[name];
+    if (!raw) return "";
+    return raw.replace("<svg", `<svg width="${px}" height="${px}" fill="${color}"`).replace(/<title>.*?<\/title>/, "");
+  };
+  const tile = (app, size, radius) => {
+    const a = APPS[app] || { bg: "#333", fg: "#fff", k: 0.6 };
+    return `<div class="tile" style="width:${size}px;height:${size}px;border-radius:${radius}px;background:${a.bg}">${iconMarkup(a.icon, a.fg, Math.round(size * a.k))}</div>`;
+  };
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // ---- pop-up types: each returns { html, frame(local, el, p) } where local = t - at ----
+  const TYPES = {
+    checklist(p) {
+      const slim = p.layout === "slim";
+      const accent = p.color === "orange" ? ORANGE : p.color === "blue" || !p.color ? BLUE : p.color;
+      const fs = slim ? 28 : 26;
+      const chips = p.items.map((it) => `<div class="chip reveal" style="font-size:${fs}px"><span class="dot">${CHECK}</span>${esc(it.label)}</div>`).join("");
+      const box = slim ? "left:44px;right:44px;top:0;bottom:0" : "left:28px;right:28px;top:80px;height:44px";
+      const head = slim ? "" : `<div class="head reveal">${p.app ? tile(p.app, 40, 11) : ""}<span class="ttl">${esc(p.title || "")}</span><span class="sub">${esc(p.sub || "")}</span></div>`;
+      return {
+        html: head + `<div class="chips" style="${box}">${chips}</div>`,
+        frame(t, el) {
+          el.querySelectorAll(".chip").forEach((c, i) => {
+            const T = p.items[i].t, on = t >= T, dot = c.querySelector(".dot");
+            c.classList.toggle("on", on);
+            dot.style.background = on ? accent : "transparent";
+            dot.style.borderColor = on ? accent : "var(--ring)";
+            dot.style.transform = `scale(${on ? between(0.55, 1, springStep(t - T, 3.4, 9)) : 1})`;
+          });
+        },
+      };
+    },
+
+    flowArrow(p) {
+      return {
+        html: `<div class="flow"><span class="fa">${esc(p.a)}</span><span class="arw" style="color:${BLUE}">&rarr;</span><span class="fb">${esc(p.b)}</span></div>`,
+        frame(t, el) {
+          const pa = clamp((t - p.tB) / 0.2), pb = clamp((t - p.tB - 0.1) / 0.22);
+          const arw = el.querySelector(".arw"), fb = el.querySelector(".fb");
+          arw.style.opacity = pa; arw.style.transform = `translateX(${(1 - easeOut3(pa)) * -16}px)`;
+          fb.style.opacity = pb; fb.style.transform = `translateX(${(1 - easeOut3(pb)) * 18}px)`;
+        },
+      };
+    },
+
+    splitBars(p) {
+      const rows = p.rows.map((r, i) => `<div class="row reveal" style="top:${22 + 58 * i}px">${tile(r.app, 44, 12)}<span class="nm">${esc(r.name)}</span>
+        <div class="track"><div class="fill" style="background:${r.color || (i ? ORANGE : "#fff")}"></div></div><span class="stat" style="width:74px">0%</span></div>`).join("");
+      return {
+        html: rows,
+        frame(t, el, local) {
+          const k = easeOut3((local - 0.25) / 0.7);
+          el.querySelectorAll(".row").forEach((row, i) => {
+            const v = p.rows[i].pct * k;
+            row.querySelector(".fill").style.width = v + "%";
+            row.querySelector(".stat").textContent = Math.round(v) + "%";
+          });
+        },
+      };
+    },
+
+    raceBars(p) {
+      const rows = [p.winner, p.loser].map((r, i) => `<div class="row reveal" style="top:${22 + 58 * i}px">${tile(r.app, 44, 12)}<span class="nm">${esc(r.name)}</span>
+        <div class="track"><div class="fill" style="background:${r.color || (i ? ORANGE : "#fff")}"></div></div><span class="stat" style="width:150px;color:var(--ink-dim)">Working...</span></div>`).join("");
+      return {
+        html: rows,
+        frame(t, el, local) {
+          const w = easeOut3((local - 0.3) / 1.6), l = 0.55 * clamp((local - 0.3) / 6);
+          const r = el.querySelectorAll(".row");
+          r[0].querySelector(".fill").style.width = 100 * w + "%";
+          r[1].querySelector(".fill").style.width = 100 * l + "%";
+          const s = r[0].querySelector(".stat"), done = w >= 0.999;
+          s.textContent = done ? "Done ✓" : "Working...";
+          s.style.color = done ? "#fff" : "var(--ink-dim)";
+        },
+      };
+    },
+
+    typingPrompt(p) {
+      return {
+        html: `<div class="chat"><span class="ph">${esc(p.placeholder || "Message AI...")}</span><span class="ty"></span><i class="caret" style="background:${BLUE}"></i></div><div class="send">${ARROW_UP}</div>`,
+        frame(t, el) {
+          const n = Math.round(p.line.length * clamp((t - p.t0) / Math.max(0.01, p.t1 - p.t0)));
+          el.querySelector(".ty").textContent = p.line.slice(0, n);
+          el.querySelector(".ph").style.display = n ? "none" : "inline";
+          el.querySelector(".caret").style.opacity = t > p.t1 + 0.3 ? 0 : (Math.floor(t * 2.5) % 2 ? 1 : 0.15);
+          el.querySelector(".send").style.background = n >= p.line.length ? "#fff" : "rgba(255,255,255,.3)";
+        },
+      };
+    },
+
+    notification(p) {
+      return {
+        html: `<div class="note">${tile(p.app, 52, 13)}<div class="txt"><div class="l1"><span>${esc(p.title)}</span><span class="when">${esc(p.when || "now")}</span></div><div class="l2">${esc(p.body || "")}</div></div></div>`,
+        frame() {},
+      };
+    },
+  };
+  const DEFAULT_LAYOUT = { checklist: "twoRow", flowArrow: "slim", splitBars: "twoRow", raceBars: "twoRow", typingPrompt: "slim", notification: "notification" };
+
+  let live = [];
+
+  window.ARE = {
+    async setup(spec) {
+      for (const [name, svg] of Object.entries(spec.icons || {})) SVG_CACHE[name] = svg;
+      const stage = document.getElementById("stage");
+      stage.innerHTML = "";
+      live = spec.popups.map((p) => {
+        const kind = TYPES[p.type];
+        if (!kind) throw new Error("unknown pop-up type " + p.type);
+        let layoutName = p.layout || DEFAULT_LAYOUT[p.type];
+        if (p.type === "checklist" && p.layout === "slim") layoutName = "slim";
+        const box = layoutName === "notification" ? { top: 204, left: 70, width: 940, height: 104 } : LAYOUT[layoutName];
+        const g = { ...box, ...(p.box || {}) };
+        const el = document.createElement("div");
+        el.className = "pane" + (layoutName === "slim" ? " slim" : "");
+        Object.assign(el.style, { left: g.left + "px", top: g.top + "px", width: g.width + "px", height: g.height + "px", opacity: 0 });
+        const built = kind(p);
+        el.innerHTML = built.html;
+        stage.appendChild(el);
+        return { p, el, built, box: g, reveals: [...el.querySelectorAll(".reveal")] };
+      });
+      await document.fonts.ready;
+      // warm every glyph used by captions so the first caption frame is never a fallback
+      const cap = document.getElementById("cap");
+      cap.style.display = "flex"; cap.style.visibility = "hidden"; cap.textContent = (spec.captionText || "") + " 0123456789";
+      await document.fonts.load('600 56px "TikTok Sans"', cap.textContent);
+      cap.style.display = "none"; cap.style.visibility = "";
+      return true;
+    },
+
+    setBackground(url, top) {
+      const bg = document.getElementById("bg");
+      return new Promise((res) => {
+        if (!url) { bg.style.display = "none"; return res(); }
+        bg.onload = () => res(); bg.onerror = () => res();
+        bg.style.top = top + "px"; bg.style.display = "block"; bg.src = url;
+      });
+    },
+
+    // returns bounding boxes of everything visible, in frame pixels (used by the safe-zone check)
+    frame(t) {
+      const boxes = [];
+      for (const L of live) {
+        const { p, el, built, reveals } = L;
+        const end = p.until + OUT;
+        if (t < p.at || t > end) { el.style.opacity = 0; el.style.visibility = "hidden"; continue; }
+        el.style.visibility = "visible";
+        const local = t - p.at;
+        const enter = clamp(local / IN);
+        const spr = springStep(local, 2.6, 10);
+        const exit = clamp((t - p.until) / OUT);
+        el.style.opacity = (enter * (1 - exit)).toFixed(4);
+        el.style.transform = `translateY(${((1 - spr) * 14).toFixed(2)}px) scale(${between(0.92, 1, spr).toFixed(4)})`;
+        reveals.forEach((r, i) => {
+          const q = easeOut3((local - 0.06 - i * STAGGER) / 0.22);
+          r.style.opacity = q.toFixed(4);
+          r.style.transform = `translateY(${((1 - q) * 6).toFixed(2)}px)`;
+        });
+        built.frame(t, el, local);
+        if (+el.style.opacity > 0.003) {
+          const b = el.getBoundingClientRect();
+          boxes.push({ id: p.id || p.type, x0: b.left, y0: b.top, x1: b.right, y1: b.bottom });
+        }
+      }
+      return boxes;
+    },
+
+    caption(text) {
+      const cap = document.getElementById("cap");
+      cap.textContent = text;
+      cap.style.display = text ? "flex" : "none";
+      const r = document.createRange(); r.selectNodeContents(cap);
+      const b = r.getBoundingClientRect();
+      return { x0: b.left, y0: b.top, x1: b.right, y1: b.bottom };
+    },
+    hideStage(h) { document.getElementById("stage").style.display = h ? "none" : "block"; },
+  };
+})();
+</script>
+</body>
+</html>
